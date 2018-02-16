@@ -9,6 +9,7 @@
 #include <random>
 #include <arc_utilities/pretty_print.hpp>
 #include <arc_utilities/eigen_helpers.hpp>
+#include <arc_utilities/simple_robot_model_interface.hpp>
 
 #ifndef UNCERTAINTY_PLANNER_STATE_HPP
 #define UNCERTAINTY_PLANNER_STATE_HPP
@@ -19,6 +20,8 @@ namespace uncertainty_planning_tools
     class UncertaintyPlannerState
     {
     protected:
+
+        typedef simple_robot_model_interface::SimpleRobotModelInterface<Configuration, ConfigAlloc> Robot;
 
         Configuration expectation_;
         Configuration command_;
@@ -45,6 +48,7 @@ namespace uncertainty_planning_tools
         bool initialized_;
         bool has_particles_;
         bool use_for_nearest_neighbors_;
+        bool action_outcome_is_nominally_independent_;
 
     public:
 
@@ -71,6 +75,7 @@ namespace uncertainty_planning_tools
             arc_helpers::SerializeString<char>(GetConfigurationType(), buffer);
             arc_helpers::SerializeFixedSizePOD<uint8_t>((uint8_t)has_particles_, buffer);
             arc_helpers::SerializeFixedSizePOD<uint8_t>((uint8_t)use_for_nearest_neighbors_, buffer);
+            arc_helpers::SerializeFixedSizePOD<uint8_t>((uint8_t)action_outcome_is_nominally_independent_, buffer);
             arc_helpers::SerializeFixedSizePOD<uint32_t>(attempt_count_, buffer);
             arc_helpers::SerializeFixedSizePOD<uint32_t>(reached_count_, buffer);
             arc_helpers::SerializeFixedSizePOD<uint32_t>(reverse_attempt_count_, buffer);
@@ -138,6 +143,9 @@ namespace uncertainty_planning_tools
             const std::pair<uint8_t, uint64_t> deserialized_use_for_nearest_neighbors = arc_helpers::DeserializeFixedSizePOD<uint8_t>(buffer, current_position);
             use_for_nearest_neighbors_ = (bool)deserialized_use_for_nearest_neighbors.first;
             current_position += deserialized_use_for_nearest_neighbors.second;
+            const std::pair<uint8_t, uint64_t> deserialized_action_outcome_is_nominally_independent = arc_helpers::DeserializeFixedSizePOD<uint8_t>(buffer, current_position);
+            action_outcome_is_nominally_independent_ = (bool)deserialized_action_outcome_is_nominally_independent.first;
+            current_position += deserialized_action_outcome_is_nominally_independent.second;
             const std::pair<uint32_t, uint64_t> deserialized_attempt_count = arc_helpers::DeserializeFixedSizePOD<uint32_t>(buffer, current_position);
             attempt_count_ = deserialized_attempt_count.first;
             current_position += deserialized_attempt_count.second;
@@ -222,14 +230,17 @@ namespace uncertainty_planning_tools
             space_independent_variances_ = Eigen::VectorXd();
             attempt_count_ = 1u;
             reached_count_ = 1u;
+            reverse_attempt_count_ = 1u;
+            reverse_reached_count_ = 1u;
             parent_motion_Pfeasibility_ = 1.0;
             raw_edge_Pfeasibility_ = 1.0;
             effective_edge_Pfeasibility_ = 1.0;
             reverse_edge_Pfeasibility_ = 1.0;
             motion_Pfeasibility_ = 1.0;
             initialized_ = true;
-            has_particles_ = false;
+            has_particles_ = true;
             use_for_nearest_neighbors_ = true;
+            action_outcome_is_nominally_independent_ = true;
             command_ = expectation_;
             split_id_ = 0u;
             transition_id_ = 0;
@@ -237,7 +248,7 @@ namespace uncertainty_planning_tools
             goal_Pfeasibility_ = 0.0;
         }
 
-        inline UncertaintyPlannerState(const uint64_t state_id, const Configuration& particle, const uint32_t attempt_count, const uint32_t reached_count, const double effective_edge_Pfeasibility, const uint32_t reverse_attempt_count, const uint32_t reverse_reached_count, const double parent_motion_Pfeasibility, const double step_size, const Configuration& command, const uint64_t transition_id, const uint64_t reverse_transition_id, const uint64_t split_id)
+        inline UncertaintyPlannerState(const uint64_t state_id, const Configuration& particle, const uint32_t attempt_count, const uint32_t reached_count, const double effective_edge_Pfeasibility, const uint32_t reverse_attempt_count, const uint32_t reverse_reached_count, const double parent_motion_Pfeasibility, const double step_size, const Configuration& command, const uint64_t transition_id, const uint64_t reverse_transition_id, const uint64_t split_id, const bool action_outcome_is_nominally_independent)
         {
             state_id_ = state_id;
             step_size_ = step_size;
@@ -260,6 +271,7 @@ namespace uncertainty_planning_tools
             initialized_ = true;
             has_particles_ = true;
             use_for_nearest_neighbors_ = true;
+            action_outcome_is_nominally_independent_ = action_outcome_is_nominally_independent;
             command_ = command;
             transition_id_ = transition_id;
             reverse_transition_id_ = reverse_transition_id;
@@ -267,35 +279,7 @@ namespace uncertainty_planning_tools
             goal_Pfeasibility_ = 0.0;
         }
 
-        /*
-        template<typename ConfigurationType, typename ConfigSerializerType, typename Robot, typename ConfigAllocType=std::allocator<ConfigurationType>>
-        inline UncertaintyPlannerState(const uint64_t state_id, const std::vector<ConfigurationType, ConfigAllocType>& particles, const Robot& robot, const uint32_t attempt_count, const uint32_t reached_count, const double effective_edge_Pfeasibility, const uint32_t reverse_attempt_count, const uint32_t reverse_reached_count, const double parent_motion_Pfeasibility, const double step_size, const ConfigurationType& command, const uint64_t transition_id, const uint64_t reverse_transition_id, const uint64_t split_id)
-        {
-            state_id_ = state_id;
-            step_size_ = step_size;
-            particles_ = particles;
-            UpdateStatistics<ConfigurationType, ConfigSerializerType, ConfigAllocType, Robot>(robot);
-            attempt_count_ = attempt_count;
-            reached_count_ = reached_count;
-            reverse_attempt_count_ = reverse_attempt_count;
-            reverse_reached_count_ = reverse_reached_count;
-            parent_motion_Pfeasibility_ = parent_motion_Pfeasibility;
-            raw_edge_Pfeasibility_ = (double)reached_count_ / (double)attempt_count_;
-            effective_edge_Pfeasibility_ = effective_edge_Pfeasibility;
-            reverse_edge_Pfeasibility_ = (double)reverse_reached_count_ / (double)reverse_attempt_count_;
-            motion_Pfeasibility_ = effective_edge_Pfeasibility_ * parent_motion_Pfeasibility_;
-            initialized_ = true;
-            has_particles_ = true;
-            use_for_nearest_neighbors_ = true;
-            command_ = command;
-            transition_id_ = transition_id;
-            reverse_transition_id_ = reverse_transition_id;
-            split_id_ = split_id;
-            goal_Pfeasibility_ = 0.0;
-        }
-        */
-
-        inline UncertaintyPlannerState(const uint64_t state_id, const std::vector<Configuration, ConfigAlloc>& particles, const uint32_t attempt_count, const uint32_t reached_count, const double effective_edge_Pfeasibility, const uint32_t reverse_attempt_count, const uint32_t reverse_reached_count, const double parent_motion_Pfeasibility, const double step_size, const Configuration& command, const uint64_t transition_id, const uint64_t reverse_transition_id, const uint64_t split_id)
+        inline UncertaintyPlannerState(const uint64_t state_id, const std::vector<Configuration, ConfigAlloc>& particles, const uint32_t attempt_count, const uint32_t reached_count, const double effective_edge_Pfeasibility, const uint32_t reverse_attempt_count, const uint32_t reverse_reached_count, const double parent_motion_Pfeasibility, const double step_size, const Configuration& command, const uint64_t transition_id, const uint64_t reverse_transition_id, const uint64_t split_id, const bool action_outcome_is_nominally_independent)
         {
             state_id_ = state_id;
             step_size_ = step_size;
@@ -312,6 +296,7 @@ namespace uncertainty_planning_tools
             initialized_ = true;
             has_particles_ = true;
             use_for_nearest_neighbors_ = true;
+            action_outcome_is_nominally_independent_ = action_outcome_is_nominally_independent;
             command_ = command;
             transition_id_ = transition_id;
             reverse_transition_id_ = reverse_transition_id;
@@ -319,28 +304,11 @@ namespace uncertainty_planning_tools
             goal_Pfeasibility_ = 0.0;
         }
 
-        /*
-        template<typename ConfigurationType, typename ConfigAllocType, typename Robot>
-        inline std::pair<Configuration, std::pair<std::pair<double, Eigen::VectorXd>, std::pair<double, Eigen::VectorXd>>> UpdateStatistics(const Robot& robot)
+        inline std::pair<Configuration, std::pair<std::pair<double, Eigen::VectorXd>, std::pair<double, Eigen::VectorXd>>> UpdateStatistics(const std::shared_ptr<Robot>& robot_ptr)
         {
-            std::function<ConfigurationType(const std::vector<ConfigurationType, ConfigAllocType>&)> average_fn = [&] (const std::vector<ConfigurationType, ConfigAllocType>& particles) { return robot.AverageConfigurations(particles); };
-            std::function<double(const ConfigurationType&, const ConfigurationType&)> distance_fn = [&] (const ConfigurationType& config1, const ConfigurationType& config2) { return robot.ComputeConfigurationDistance(config1, config2); };
-            std::function<Eigen::VectorXd(const ConfigurationType&, const ConfigurationType&)> dim_distance_fn = [&] (const ConfigurationType& config1, const ConfigurationType& config2) { return robot.ComputePerDimensionConfigurationDistance(config1, config2); };
-            expectation_ = ComputeExpectation(average_fn);
-            variance_ = ComputeVariance(expectation_, distance_fn);
-            variances_ = ComputeDirectionalVariance(expectation_, dim_distance_fn);
-            space_independent_variance_ = ComputeSpaceIndependentVariance(expectation_, distance_fn, step_size_);
-            space_independent_variances_ = ComputeSpaceIndependentDirectionalVariance(expectation_, dim_distance_fn, step_size_);
-            return std::pair<ConfigurationType, std::pair<std::pair<double, Eigen::VectorXd>, std::pair<double, Eigen::VectorXd>>>(expectation_, std::pair<std::pair<double, Eigen::VectorXd>, std::pair<double, Eigen::VectorXd>>(std::pair<double, Eigen::VectorXd>(variance_, variances_), std::pair<double, Eigen::VectorXd>(space_independent_variance_, space_independent_variances_)));
-        }
-        */
-
-        template <typename Robot>
-        inline std::pair<Configuration, std::pair<std::pair<double, Eigen::VectorXd>, std::pair<double, Eigen::VectorXd>>> UpdateStatistics(const Robot& robot)
-        {
-            std::function<Configuration(const std::vector<Configuration, ConfigAlloc>&)> average_fn = [&] (const std::vector<Configuration, ConfigAlloc>& particles) { return robot.AverageConfigurations(particles); };
-            std::function<double(const Configuration&, const Configuration&)> distance_fn = [&] (const Configuration& config1, const Configuration& config2) { return robot.ComputeConfigurationDistance(config1, config2); };
-            std::function<Eigen::VectorXd(const Configuration&, const Configuration&)> dim_distance_fn = [&] (const Configuration& config1, const Configuration& config2) { return robot.ComputePerDimensionConfigurationDistance(config1, config2); };
+            std::function<Configuration(const std::vector<Configuration, ConfigAlloc>&)> average_fn = [&] (const std::vector<Configuration, ConfigAlloc>& particles) { return robot_ptr->AverageConfigurations(particles); };
+            std::function<double(const Configuration&, const Configuration&)> distance_fn = [&] (const Configuration& config1, const Configuration& config2) { return robot_ptr->ComputeConfigurationDistance(config1, config2); };
+            std::function<Eigen::VectorXd(const Configuration&, const Configuration&)> dim_distance_fn = [&] (const Configuration& config1, const Configuration& config2) { return robot_ptr->ComputePerDimensionConfigurationDistance(config1, config2); };
             expectation_ = ComputeExpectation(average_fn);
             variance_ = ComputeVariance(expectation_, distance_fn);
             variances_ = ComputeDirectionalVariance(expectation_, dim_distance_fn);
@@ -349,7 +317,7 @@ namespace uncertainty_planning_tools
             return std::pair<Configuration, std::pair<std::pair<double, Eigen::VectorXd>, std::pair<double, Eigen::VectorXd>>>(expectation_, std::pair<std::pair<double, Eigen::VectorXd>, std::pair<double, Eigen::VectorXd>>(std::pair<double, Eigen::VectorXd>(variance_, variances_), std::pair<double, Eigen::VectorXd>(space_independent_variance_, space_independent_variances_)));
         }
 
-        inline UncertaintyPlannerState() : goal_Pfeasibility_(0.0), state_id_(0), transition_id_(0), reverse_transition_id_(0), split_id_(0u), initialized_(false), has_particles_(false), use_for_nearest_neighbors_(false) {}
+        inline UncertaintyPlannerState() : goal_Pfeasibility_(0.0), state_id_(0), transition_id_(0), reverse_transition_id_(0), split_id_(0u), initialized_(false), has_particles_(false), use_for_nearest_neighbors_(false), action_outcome_is_nominally_independent_(false) {}
 
         inline bool IsInitialized() const
         {
@@ -364,6 +332,11 @@ namespace uncertainty_planning_tools
         inline bool UseForNearestNeighbors() const
         {
             return use_for_nearest_neighbors_;
+        }
+
+        inline bool IsActionOutcomeNominallyIndependent() const
+        {
+            return action_outcome_is_nominally_independent_;
         }
 
         inline void EnableForNearestNeighbors()
