@@ -12,21 +12,15 @@
 #include <thread>
 #include <atomic>
 #include <arc_utilities/arc_helpers.hpp>
-#include <arc_utilities/zlib_helpers.hpp>
 #include <arc_utilities/eigen_helpers.hpp>
-#include <arc_utilities/simple_hierarchical_clustering.hpp>
-#include <arc_utilities/simple_hausdorff_distance.hpp>
-#include <arc_utilities/simple_rrt_planner.hpp>
-#include <sdf_tools/tagged_object_collision_map.hpp>
-#include <sdf_tools/sdf.hpp>
-#include <uncertainty_planning_core/uncertainty_planner_state.hpp>
-#include <uncertainty_planning_core/simple_simulator_interface.hpp>
+#include <arc_utilities/simple_robot_models.hpp>
+#include <arc_utilities/zlib_helpers.hpp>
 #include <uncertainty_planning_core/execution_policy.hpp>
+#include <uncertainty_planning_core/simple_simulator_interface.hpp>
+#include <uncertainty_planning_core/uncertainty_planner_state.hpp>
+#include <uncertainty_planning_core/uncertainty_contact_planning.hpp>
 #include <ros/ros.h>
 #include <visualization_msgs/MarkerArray.h>
-#include <arc_utilities/eigen_helpers_conversions.hpp>
-#include <uncertainty_planning_core/uncertainty_contact_planning.hpp>
-#include <arc_utilities/simple_robot_models.hpp>
 
 #ifndef UNCERTAINTY_PLANNING_CORE_HPP
 #define UNCERTAINTY_PLANNING_CORE_HPP
@@ -159,6 +153,41 @@ namespace uncertainty_planning_core
     using LinkedClusteringPtr = std::shared_ptr<LinkedClustering>;
     using LinkedPlanningSpace = uncertainty_contact_planning::UncertaintyPlanningSpace<LinkedConfig, LinkedConfigSerializer, LinkedConfigAlloc, PRNG>;
 
+    // VectorXd
+
+    class VectorXdConfigSerializer
+    {
+    public:
+
+        static inline std::string TypeName()
+        {
+            return std::string("EigenVectorXdSerializer");
+        }
+
+        static inline uint64_t Serialize(const Eigen::VectorXd& value, std::vector<uint8_t>& buffer)
+        {
+            return EigenHelpers::Serialize(value, buffer);
+        }
+
+        static inline std::pair<Eigen::VectorXd, uint64_t> Deserialize(const std::vector<uint8_t>& buffer, const uint64_t current)
+        {
+            return EigenHelpers::Deserialize<Eigen::VectorXd>(buffer, current);
+        }
+    };
+
+    using VectorXdConfig = Eigen::VectorXd;
+    using VectorXdConfigAlloc = std::allocator<Eigen::VectorXd>;
+    using VectorXdPolicy = execution_policy::ExecutionPolicy<VectorXdConfig, VectorXdConfigSerializer, VectorXdConfigAlloc>;
+    using VectorXdSampler = simple_sampler_interface::SamplerInterface<VectorXdConfig, PRNG>;
+    using VectorXdSamplerPtr = std::shared_ptr<VectorXdSampler>;
+    using VectorXdRobot = simple_robot_model_interface::SimpleRobotModelInterface<VectorXdConfig, VectorXdConfigAlloc>;
+    using VectorXdRobotPtr = std::shared_ptr<VectorXdRobot>;
+    using VectorXdSimulator = simple_simulator_interface::SimulatorInterface<VectorXdConfig, PRNG, VectorXdConfigAlloc>;
+    using VectorXdSimulatorPtr = std::shared_ptr<VectorXdSimulator>;
+    using VectorXdClustering = simple_outcome_clustering_interface::OutcomeClusteringInterface<VectorXdConfig, VectorXdConfigAlloc>;
+    using VectorXdClusteringPtr = std::shared_ptr<VectorXdClustering>;
+    using VectorXdPlanningSpace = uncertainty_contact_planning::UncertaintyPlanningSpace<VectorXdConfig, VectorXdConfigSerializer, VectorXdConfigAlloc, PRNG>;
+
     // Policy and tree type definitions
 
     template<typename Configuration, typename ConfigSerializer, typename ConfigAlloc>
@@ -181,11 +210,15 @@ namespace uncertainty_planning_core
 
     using LinkedUserGoalStateCheckFn = std::function<double(const UncertaintyPlanningState<LinkedConfig, LinkedConfigSerializer, LinkedConfigAlloc>&)>;
 
+    using VectorXdUserGoalStateCheckFn = std::function<double(const UncertaintyPlanningState<VectorXdConfig, VectorXdConfigSerializer, VectorXdConfigAlloc>&)>;
+
     using SE2UserGoalConfigCheckFn = std::function<bool(const SE2Config&)>;
 
     using SE3UserGoalConfigCheckFn = std::function<bool(const SE3Config&)>;
 
     using LinkedUserGoalConfigCheckFn = std::function<bool(const LinkedConfig&)>;
+
+    using VectorXdUserGoalConfigCheckFn = std::function<bool(const VectorXdConfig&)>;
 
     // Implementations of basic user goal config check -> user goal state check functions
 
@@ -238,6 +271,9 @@ namespace uncertainty_planning_core
     inline double LinkedUserGoalCheckWrapperFn(const UncertaintyPlanningState<LinkedConfig, LinkedConfigSerializer, LinkedConfigAlloc>& state,
                                                const LinkedUserGoalConfigCheckFn& user_goal_config_check_fn);
 
+    inline double VectorXdUserGoalCheckWrapperFn(const UncertaintyPlanningState<VectorXdConfig, VectorXdConfigSerializer, VectorXdConfigAlloc>& state,
+                                                 const VectorXdUserGoalConfigCheckFn& user_goal_config_check_fn);
+
     // Policy saving and loading
 
     template<typename Configuration, typename ConfigSerializer, typename ConfigAlloc>
@@ -245,9 +281,9 @@ namespace uncertainty_planning_core
     {
         std::cout << "Serializing planner tree..." << std::endl;
         std::function<uint64_t(const UncertaintyPlanningTreeState<Configuration, ConfigSerializer, ConfigAlloc>&, std::vector<uint8_t>&)> planning_tree_state_serializer_fn
-                = [] (const UncertaintyPlanningTreeState<Configuration, ConfigSerializer, ConfigAlloc>& state, std::vector<uint8_t>& buffer)
+                = [] (const UncertaintyPlanningTreeState<Configuration, ConfigSerializer, ConfigAlloc>& state, std::vector<uint8_t>& ser_buffer)
         { return UncertaintyPlanningTreeState<Configuration, ConfigSerializer, ConfigAlloc>::Serialize(state,
-                                                                                                       buffer,
+                                                                                                       ser_buffer,
                                                                                                        UncertaintyPlanningState<Configuration, ConfigSerializer, ConfigAlloc>::Serialize); };
         arc_helpers::SerializeVector(planner_tree, buffer, planning_tree_state_serializer_fn);
         const uint64_t size = arc_helpers::SerializeVector(planner_tree, buffer, planning_tree_state_serializer_fn);
@@ -260,9 +296,9 @@ namespace uncertainty_planning_core
     {
         std::cout << "Deserializing planner tree..." << std::endl;
         std::function<std::pair<UncertaintyPlanningTreeState<Configuration, ConfigSerializer, ConfigAlloc>, uint64_t>(const std::vector<uint8_t>&, const uint64_t)> planning_tree_state_deserializer_fn
-                = [] (const std::vector<uint8_t>& buffer, const uint64_t current)
-        { return UncertaintyPlanningTreeState<Configuration, ConfigSerializer, ConfigAlloc>::Deserialize(buffer,
-                                                                                                         current,
+                = [] (const std::vector<uint8_t>& deser_buffer, const uint64_t deser_current)
+        { return UncertaintyPlanningTreeState<Configuration, ConfigSerializer, ConfigAlloc>::Deserialize(deser_buffer,
+                                                                                                         deser_current,
                                                                                                          UncertaintyPlanningState<Configuration, ConfigSerializer, ConfigAlloc>::Deserialize); };
         const std::pair<UncertaintyPlanningTree<Configuration, ConfigSerializer, ConfigAlloc>, uint64_t> deserialized_tree
                 = arc_helpers::DeserializeVector<UncertaintyPlanningTreeState<Configuration, ConfigSerializer, ConfigAlloc>>(buffer, current, planning_tree_state_deserializer_fn);
@@ -279,10 +315,8 @@ namespace uncertainty_planning_core
             std::vector<uint8_t> buffer;
             SerializePlannerTree<Configuration, ConfigSerializer, ConfigAlloc>(planner_tree, buffer);
             // Write a header to detect if compression is enabled (someday)
-            //std::cout << "Compressing for storage..." << std::endl;
-            //const std::vector<uint8_t> compressed_serialized_tree = ZlibHelpers::CompressBytes(buffer);
-            std::cout << " Compression disabled (no Zlib available)..." << std::endl;
-            const std::vector<uint8_t> compressed_serialized_tree = buffer;
+            std::cout << "Compressing for storage..." << std::endl;
+            const std::vector<uint8_t> compressed_serialized_tree = ZlibHelpers::CompressBytes(buffer);
             std::cout << "Attempting to save to file..." << std::endl;
             std::ofstream output_file(filepath, std::ios::out|std::ios::binary);
             const size_t serialized_size = compressed_serialized_tree.size();
@@ -314,10 +348,8 @@ namespace uncertainty_planning_core
         std::vector<uint8_t> file_buffer((size_t)serialized_size, 0x00);
         input_file.read(reinterpret_cast<char*>(file_buffer.data()), serialized_size);
         // Write a header to detect if compression is enabled (someday)
-        //std::cout << "Decompressing from storage..." << std::endl;
-        //const std::vector<uint8_t> decompressed_serialized_tree = ZlibHelpers::DecompressBytes(file_buffer);
-        std::cout << "Decompression disabled (no Zlib available)..." << std::endl;
-        const std::vector<uint8_t> decompressed_serialized_tree = file_buffer;
+        std::cout << "Decompressing from storage..." << std::endl;
+        const std::vector<uint8_t> decompressed_serialized_tree = ZlibHelpers::DecompressBytes(file_buffer);
         std::cout << "Attempting to deserialize tree..." << std::endl;
         return DeserializePlannerTree<Configuration, ConfigSerializer, ConfigAlloc>(decompressed_serialized_tree, 0u).first;
     }
@@ -388,6 +420,10 @@ namespace uncertainty_planning_core
 
     LinkedPolicy LoadLinkedPolicy(const std::string& filename);
 
+    bool SaveVectorXdPolicy(const VectorXdPolicy& policy, const std::string& filename);
+
+    VectorXdPolicy LoadVectorXdPolicy(const std::string& filename);
+
     // SE2 Interface
 
     std::vector<SE2Config, SE2ConfigAlloc>
@@ -429,6 +465,7 @@ namespace uncertainty_planning_core
                                  const SE2SamplerPtr& sampler,
                                  const SE2ClusteringPtr& clustering,
                                  const SE2Policy& policy,
+                                 const bool link_runtime_states_to_planned_parent,
                                  const SE2Config& start,
                                  const SE2Config& goal,
                                  const double policy_marker_size,
@@ -441,12 +478,14 @@ namespace uncertainty_planning_core
                                 const SE2SamplerPtr& sampler,
                                 const SE2ClusteringPtr& clustering,
                                 const SE2Policy& policy,
+                                const bool link_runtime_states_to_planned_parent,
                                 const SE2Config& start,
                                 const SE2Config& goal,
                                 const double policy_marker_size,
                                 const std::function<std::vector<SE2Config, SE2ConfigAlloc>(const SE2Config&,
                                                                                            const SE2Config&,
                                                                                            const SE2Config&,
+                                                                                           const bool,
                                                                                            const bool)>& robot_execution_fn,
                                 const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
 
@@ -457,6 +496,7 @@ namespace uncertainty_planning_core
                                  const SE2SamplerPtr& sampler,
                                  const SE2ClusteringPtr& clustering,
                                  const SE2Policy& policy,
+                                 const bool link_runtime_states_to_planned_parent,
                                  const SE2Config& start,
                                  const SE2UserGoalConfigCheckFn& user_goal_check_fn,
                                  const double policy_marker_size,
@@ -469,12 +509,14 @@ namespace uncertainty_planning_core
                                 const SE2SamplerPtr& sampler,
                                 const SE2ClusteringPtr& clustering,
                                 const SE2Policy& policy,
+                                const bool link_runtime_states_to_planned_parent,
                                 const SE2Config& start,
                                 const SE2UserGoalConfigCheckFn& user_goal_check_fn,
                                 const double policy_marker_size,
                                 const std::function<std::vector<SE2Config, SE2ConfigAlloc>(const SE2Config&,
                                                                                            const SE2Config&,
                                                                                            const SE2Config&,
+                                                                                           const bool,
                                                                                            const bool)>& robot_execution_fn,
                                 const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
 
@@ -519,6 +561,7 @@ namespace uncertainty_planning_core
                                  const SE3SamplerPtr& sampler,
                                  const SE3ClusteringPtr& clustering,
                                  const SE3Policy& policy,
+                                 const bool link_runtime_states_to_planned_parent,
                                  const SE3Config& start,
                                  const SE3Config& goal,
                                  const double policy_marker_size,
@@ -531,12 +574,14 @@ namespace uncertainty_planning_core
                                 const SE3SamplerPtr& sampler,
                                 const SE3ClusteringPtr& clustering,
                                 const SE3Policy& policy,
+                                const bool link_runtime_states_to_planned_parent,
                                 const SE3Config& start,
                                 const SE3Config& goal,
                                 const double policy_marker_size,
                                 const std::function<std::vector<SE3Config, SE3ConfigAlloc>(const SE3Config&,
                                                                                            const SE3Config&,
                                                                                            const SE3Config&,
+                                                                                           const bool,
                                                                                            const bool)>& robot_execution_fn,
                                 const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
 
@@ -547,6 +592,7 @@ namespace uncertainty_planning_core
                                  const SE3SamplerPtr& sampler,
                                  const SE3ClusteringPtr& clustering,
                                  const SE3Policy& policy,
+                                 const bool link_runtime_states_to_planned_parent,
                                  const SE3Config& start,
                                  const SE3UserGoalConfigCheckFn& user_goal_check_fn,
                                  const double policy_marker_size,
@@ -559,12 +605,14 @@ namespace uncertainty_planning_core
                                 const SE3SamplerPtr& sampler,
                                 const SE3ClusteringPtr& clustering,
                                 const SE3Policy& policy,
+                                const bool link_runtime_states_to_planned_parent,
                                 const SE3Config& start,
                                 const SE3UserGoalConfigCheckFn& user_goal_check_fn,
                                 const double policy_marker_size,
                                 const std::function<std::vector<SE3Config, SE3ConfigAlloc>(const SE3Config&,
                                                                                            const SE3Config&,
                                                                                            const SE3Config&,
+                                                                                           const bool,
                                                                                            const bool)>& robot_execution_fn,
                                 const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
 
@@ -609,6 +657,7 @@ namespace uncertainty_planning_core
                                     const LinkedSamplerPtr& sampler,
                                     const LinkedClusteringPtr& clustering,
                                     const LinkedPolicy& policy,
+                                    const bool link_runtime_states_to_planned_parent,
                                     const LinkedConfig& start,
                                     const LinkedConfig& goal,
                                     const double policy_marker_size,
@@ -621,12 +670,14 @@ namespace uncertainty_planning_core
                                    const LinkedSamplerPtr& sampler,
                                    const LinkedClusteringPtr& clustering,
                                    const LinkedPolicy& policy,
+                                   const bool link_runtime_states_to_planned_parent,
                                    const LinkedConfig& start,
                                    const LinkedConfig& goal,
                                    const double policy_marker_size,
                                    const std::function<std::vector<LinkedConfig, LinkedConfigAlloc>(const LinkedConfig&,
                                                                                                     const LinkedConfig&,
                                                                                                     const LinkedConfig&,
+                                                                                                    const bool,
                                                                                                     const bool)>& robot_execution_fn,
                                    const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
 
@@ -637,6 +688,7 @@ namespace uncertainty_planning_core
                                     const LinkedSamplerPtr& sampler,
                                     const LinkedClusteringPtr& clustering,
                                     const LinkedPolicy& policy,
+                                    const bool link_runtime_states_to_planned_parent,
                                     const LinkedConfig& start,
                                     const LinkedUserGoalConfigCheckFn& user_goal_check_fn,
                                     const double policy_marker_size,
@@ -649,14 +701,112 @@ namespace uncertainty_planning_core
                                    const LinkedSamplerPtr& sampler,
                                    const LinkedClusteringPtr& clustering,
                                    const LinkedPolicy& policy,
+                                   const bool link_runtime_states_to_planned_parent,
                                    const LinkedConfig& start,
                                    const LinkedUserGoalConfigCheckFn& user_goal_check_fn,
                                    const double policy_marker_size,
                                    const std::function<std::vector<LinkedConfig, LinkedConfigAlloc>(const LinkedConfig&,
                                                                                                     const LinkedConfig&,
                                                                                                     const LinkedConfig&,
+                                                                                                    const bool,
                                                                                                     const bool)>& robot_execution_fn,
                                    const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
+
+    // VectorXd Interface
+
+    std::vector<VectorXdConfig, VectorXdConfigAlloc>
+    DemonstrateVectorXdSimulator(const PLANNING_AND_EXECUTION_OPTIONS& options,
+                                 const VectorXdRobotPtr& robot,
+                                 const VectorXdSimulatorPtr& simulator,
+                                 const VectorXdSamplerPtr& sampler,
+                                 const VectorXdClusteringPtr& clustering,
+                                 const VectorXdConfig& start,
+                                 const VectorXdConfig& goal,
+                                 const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
+
+    std::pair<VectorXdPolicy, std::map<std::string, double>>
+    PlanVectorXdUncertainty(const PLANNING_AND_EXECUTION_OPTIONS& options,
+                            const VectorXdRobotPtr& robot,
+                            const VectorXdSimulatorPtr& simulator,
+                            const VectorXdSamplerPtr& sampler,
+                            const VectorXdClusteringPtr& clustering,
+                            const VectorXdConfig& start,
+                            const VectorXdConfig& goal,
+                            const double policy_marker_size,
+                            const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
+
+    std::pair<VectorXdPolicy, std::map<std::string, double>>
+    PlanVectorXdUncertainty(const PLANNING_AND_EXECUTION_OPTIONS& options,
+                            const VectorXdRobotPtr& robot,
+                            const VectorXdSimulatorPtr& simulator,
+                            const VectorXdSamplerPtr& sampler,
+                            const VectorXdClusteringPtr& clustering,
+                            const VectorXdConfig& start,
+                            const VectorXdUserGoalStateCheckFn& user_goal_check_fn,
+                            const double policy_marker_size,
+                            const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
+
+    std::pair<VectorXdPolicy, std::pair<std::map<std::string, double>, std::pair<std::vector<int64_t>, std::vector<double>>>>
+    SimulateVectorXdUncertaintyPolicy(const PLANNING_AND_EXECUTION_OPTIONS& options,
+                                      const VectorXdRobotPtr& robot,
+                                      const VectorXdSimulatorPtr& simulator,
+                                      const VectorXdSamplerPtr& sampler,
+                                      const VectorXdClusteringPtr& clustering,
+                                      const VectorXdPolicy& policy,
+                                      const bool link_runtime_states_to_planned_parent,
+                                      const VectorXdConfig& start,
+                                      const VectorXdConfig& goal,
+                                      const double policy_marker_size,
+                                      const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
+
+    std::pair<VectorXdPolicy, std::pair<std::map<std::string, double>, std::pair<std::vector<int64_t>, std::vector<double>>>>
+    ExecuteVectorXdUncertaintyPolicy(const PLANNING_AND_EXECUTION_OPTIONS& options,
+                                     const VectorXdRobotPtr& robot,
+                                     const VectorXdSimulatorPtr& simulator,
+                                     const VectorXdSamplerPtr& sampler,
+                                     const VectorXdClusteringPtr& clustering,
+                                     const VectorXdPolicy& policy,
+                                     const bool link_runtime_states_to_planned_parent,
+                                     const VectorXdConfig& start,
+                                     const VectorXdConfig& goal,
+                                     const double policy_marker_size,
+                                     const std::function<std::vector<VectorXdConfig, VectorXdConfigAlloc>(const VectorXdConfig&,
+                                                                                                          const VectorXdConfig&,
+                                                                                                          const VectorXdConfig&,
+                                                                                                          const bool,
+                                                                                                          const bool)>& robot_execution_fn,
+                                     const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
+
+    std::pair<VectorXdPolicy, std::pair<std::map<std::string, double>, std::pair<std::vector<int64_t>, std::vector<double>>>>
+    SimulateVectorXdUncertaintyPolicy(const PLANNING_AND_EXECUTION_OPTIONS& options,
+                                      const VectorXdRobotPtr& robot,
+                                      const VectorXdSimulatorPtr& simulator,
+                                      const VectorXdSamplerPtr& sampler,
+                                      const VectorXdClusteringPtr& clustering,
+                                      const VectorXdPolicy& policy,
+                                      const bool link_runtime_states_to_planned_parent,
+                                      const VectorXdConfig& start,
+                                      const VectorXdUserGoalConfigCheckFn& user_goal_check_fn,
+                                      const double policy_marker_size,
+                                      const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
+
+    std::pair<VectorXdPolicy, std::pair<std::map<std::string, double>, std::pair<std::vector<int64_t>, std::vector<double>>>>
+    ExecuteVectorXdUncertaintyPolicy(const PLANNING_AND_EXECUTION_OPTIONS& options,
+                                     const VectorXdRobotPtr& robot,
+                                     const VectorXdSimulatorPtr& simulator,
+                                     const VectorXdSamplerPtr& sampler,
+                                     const VectorXdClusteringPtr& clustering,
+                                     const VectorXdPolicy& policy,
+                                     const bool link_runtime_states_to_planned_parent,
+                                     const VectorXdConfig& start,
+                                     const VectorXdUserGoalConfigCheckFn& user_goal_check_fn,
+                                     const double policy_marker_size,
+                                     const std::function<std::vector<VectorXdConfig, VectorXdConfigAlloc>(const VectorXdConfig&,
+                                                                                                          const VectorXdConfig&,
+                                                                                                          const VectorXdConfig&,
+                                                                                                          const bool,
+                                                                                                          const bool)>& robot_execution_fn,
+                                     const std::function<void(const visualization_msgs::MarkerArray&)>& display_fn);
 
     inline std::ostream& operator<<(std::ostream& strm, const PLANNING_AND_EXECUTION_OPTIONS& options)
     {
