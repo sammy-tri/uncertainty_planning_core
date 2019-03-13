@@ -107,6 +107,7 @@ set(UNCERTAINTY_PLANNING_CORE_SOURCES
     include/${PROJECT_NAME}/uncertainty_contact_planning.hpp
     include/${PROJECT_NAME}/execution_policy.hpp
     include/${PROJECT_NAME}/uncertainty_planning_core.hpp
+    include/${PROJECT_NAME}/action_primitive.hpp
     include/${PROJECT_NAME}/task_planner_adapter.hpp
     src/${PROJECT_NAME}/uncertainty_planning_core.cpp)
 
@@ -125,4 +126,3 @@ target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES} rt)
 add_executable(task_planner_adapter_example src/task_planner_adapter_example.cpp)
 add_dependencies(task_planner_adapter_example ${catkin_EXPORTED_TARGETS})
 target_link_libraries(task_planner_adapter_example ${PROJECT_NAME} ${catkin_LIBRARIES} rt)
-
